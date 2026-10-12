@@ -29,6 +29,7 @@ data class TransferItem(
      * 另一台的 `.part` 上。
      */
     val deviceDir: String = "",
+    val error: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -39,6 +40,7 @@ data class TransferItem(
         .put("done", doneBytes)
         .put("mtime", mtime)
         .put("dir", deviceDir)
+        .put("error", error)
 
     companion object {
         fun fromJson(o: JSONObject): TransferItem = TransferItem(
@@ -51,6 +53,7 @@ data class TransferItem(
             doneBytes = o.optLong("done"),
             mtime = o.optLong("mtime"),
             deviceDir = o.optString("dir"),
+            error = o.optString("error"),
         )
     }
 }

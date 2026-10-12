@@ -275,6 +275,7 @@ class DownloadService : Service() {
 
             var attempt = 0
             var result: ObjectRepository.PumpResult = ObjectRepository.PumpResult.FAILED
+            var failureReason = ""
             var identityReset = false
             // 本文件最新落盘字节数（进度回调持续更新）；
             // 结算时用它，绝不回写循环外的陈旧 item（此前 0B/0% bug 的根源）
@@ -284,6 +285,7 @@ class DownloadService : Service() {
             do {
                 val h = boundHost
                 if (h == null) {
+                    failureReason = "相机连接地址不可用"
                     result = ObjectRepository.PumpResult.FAILED
                     break
                 }
@@ -295,12 +297,14 @@ class DownloadService : Service() {
                 val remote = try {
                     ObjectRepository.stat(h, item.path)
                 } catch (e: Exception) {
+                    failureReason = "读取相机文件信息失败：${e.message ?: e.javaClass.simpleName}"
                     result = ObjectRepository.PumpResult.FAILED
                     break
                 }
                 val identityChanged = remote.size != item.size || remote.mtime != item.mtime
                 if (identityChanged) {
                     if (identityReset) {
+                        failureReason = "相机文件大小或时间仍在变化，请写卡完成后重试"
                         result = ObjectRepository.PumpResult.FAILED
                         break
                     }
@@ -340,6 +344,7 @@ class DownloadService : Service() {
                 val need = (item.size - base).coerceAtLeast(0L)
                 val avail = sink.availableBytes()
                 if (avail != null && avail < need) {
+                    failureReason = "手机存储空间不足"
                     android.util.Log.w(
                         "DownloadService",
                         "空间不足，跳过本项：需 ${need}B 可用 ${avail}B ${item.path}",
@@ -353,6 +358,10 @@ class DownloadService : Service() {
                     ObjectRepository.pumpToStream(
                         h, item.path, base, out,
                         cancelled = { stopAll || currentDeviceKey() != boundGuid },
+                        withSegment = { segment ->
+                            ThumbStore.withDownloadSegment(segment) { stopAll || currentDeviceKey() != boundGuid }
+                        },
+                        yieldForPreview = { ThumbStore.previewsNeedChannel() },
                         // 回调值已是绝对字节数（REST 基址 + 已传），切勿再加 base
                         // —— 加第二次就是"续传后 39.8MB/23.9MB"超量显示的根源
                         onProgress = { total ->
@@ -367,14 +376,19 @@ class DownloadService : Service() {
                         },
                     )
                 } catch (e: Exception) {
+                    failureReason = "写入或传输失败：${e.message ?: e.javaClass.simpleName}"
                     ObjectRepository.PumpResult.FAILED
                 } finally {
                     runCatching { out.close() }
+                }
+                if (result == ObjectRepository.PumpResult.FAILED) {
+                    failureReason = ObjectRepository.lastTransferFailure(item.path) ?: failureReason
                 }
                 if (result == ObjectRepository.PumpResult.COMPLETED) {
                     lastTotal = item.size
                     runCatching { sink.commit(item.size) }
                         .onFailure {
+                            failureReason = "保存文件失败：${it.message ?: it.javaClass.simpleName}"
                             android.util.Log.e("DownloadService", "commit failed: ${item.path}", it)
                             result = ObjectRepository.PumpResult.FAILED
                         }
@@ -390,6 +404,8 @@ class DownloadService : Service() {
                     else -> TransferState.FAILED
                 },
                 doneBytes = lastTotal,
+                error = if (result == ObjectRepository.PumpResult.FAILED && !stopAll)
+                    failureReason.ifBlank { "原图传输失败，未收到完整文件" } else "",
             )
             TransferStore.update(q, doneItem)
             TransferStore.updateBatchProgress(q)

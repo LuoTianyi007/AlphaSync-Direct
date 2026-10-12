@@ -207,7 +207,7 @@ private fun LocalPhotoPage(
         //   传感器横向、方向全在标签里——与列表缩略图同一转法），再把已点过的旋转
         //   **瞬时**补上（不播动画）；状态落定后才赋 bmp（旋转协程靠"bmp 从无到有"唤醒）。
         //   手动旋转仍叠加在 EXIF 之上：baked / 限流只计**用户段**，EXIF 段不占额度。
-        val exifTurns = withContext(Dispatchers.IO) { LocalPhoto.exifTurns(context, uri) }
+        val exifTurns = withContext(Dispatchers.IO) { LocalPhoto.previewExifTurns(context, uri, item.name) }
         val already = turnsOf()
         val loaded = PhotoRotate.rotateSteps(b, exifTurns + already)
         baked = already
